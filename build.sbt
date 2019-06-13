@@ -1,6 +1,6 @@
 lazy val root = (project in file(".")).
 settings (
-  name := "GroupService",
+  name := "TicketService",
   version := "1.0",
   scalaVersion := "2.12.1",
   scalacOptions in ThisBuild ++= Seq("-unchecked", "-deprecation", "-feature"),

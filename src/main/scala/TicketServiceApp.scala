@@ -1,3 +1,5 @@
+import java.io.File
+
 import akka.actor.{ActorRef, ActorSystem, Props}
 
 import scala.collection.mutable.ListBuffer
@@ -19,9 +21,10 @@ object TicketServiceApp {
 
   def apply(system: ActorSystem, numKiosks: Int, ackEach: Int, ticketMasterList:ListBuffer[Ticket], chunkSize:Int, ticket:Ticket): ActorRef = {
 
+    val file = new File("masterData.txt")
+
     /** Service tier: create app servers */
     val kioskList = for (i <- 0 until numKiosks)
-      //yield system.actorOf(GenericServer.props(i, numNodes, stores, ackEach), "GenericServer" + i)
       yield system.actorOf(Kiosk.props(i, numKiosks, ackEach, ticket), "Kiosk" + i)
 
 
@@ -31,9 +34,9 @@ object TicketServiceApp {
 
 
     /** Load-generating master */
-    val master = system.actorOf(LoadMaster.props(numKiosks, kioskList, ackEach, ticketMasterList, chunkSize), "LoadMaster")
+    val master = system.actorOf(LoadMaster.props(numKiosks, kioskList, ackEach, ticketMasterList, ticket, chunkSize, file), "LoadMaster")
     master
+
   }
 }
-
 

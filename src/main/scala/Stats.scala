@@ -31,7 +31,6 @@ class Stats {
   }
 
   override def toString(): String = {
-    //s"Stats msgs=$messages alloc=$allocated checks=$checks touches=$touches miss=$misses err=$errors"
     s"Stats TicketRequests=$messages TicketsBought=$bought EmptyKiosk=$emptyKiosk MoreTicketsReq=$moreTickets ChunkConcurrencyError=$chunkConcurrencyError SoldOutMsg=$soldOut"
   }
 }

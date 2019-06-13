@@ -1,3 +1,5 @@
+import java.io.{File, FileWriter, PrintWriter}
+
 import scala.concurrent.duration._
 import scala.concurrent.Await
 import scala.language.postfixOps
@@ -5,18 +7,19 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.event.Logging
 import akka.pattern.ask
 import akka.util.Timeout
+import com.typesafe.config.ConfigFactory
 
 import scala.collection.mutable.ListBuffer
 
 object TestHarness {
   val system = ActorSystem("TicketService")
   implicit val timeout = Timeout(60 seconds)
-  val numKiosks = 100                        // changed from 10 to 1000 and numNodes to numKiosks
-  val burstSize = 1                        // Burst size should be number of BuyTicket commands ( what to make this?)  was 1000
-  val opsPerKiosk = 500                      // this will send 500 BuyTicket requests to each kiosk for a total of 50k BuyTicket Requests
+  val numKiosks = 1000                        // create 1000 kiosk Actors
+  val burstSize = 1
+  val opsPerKiosk = 50                     // this will send 50 BuyTicket requests to each kiosk for a total of 50k BuyTicket Requests
 
-  val venueSize = 9525;       // change to 9525 (actual Red Rocks Capacity)
-  val chunkSize = 3;         //  3 chunk / 1246955 moreTicket / 2991 ms ||  15 chunk / 1482334 moreTicket / 3506 ms || 25 chunk / 1685843 moreTicket / 3192 ms
+  val venueSize = 9525;
+  val chunkSize = 3;
 
   val venue = Venue("Red Rocks")
   val event = Event("DeadRocks VI", venue)
@@ -40,10 +43,20 @@ object TestHarness {
     val throughput = (opsPerKiosk * numKiosks)/runtime
     println(s"Done in $runtime ms ($throughput Kops/sec)")
     Thread.sleep(2000)
+
+    val fw = new FileWriter("masterData.txt")
+    val pw = new PrintWriter(fw)
+    pw.write("")
+    pw.flush()
+    pw.close()
+
     system.terminate
   }
 
   def runUntilDone() = {
+    /**uncomment out 2 lines below to test loadMaster crash + restart **/
+    //master ! new Exception
+    //Thread.sleep(2000)
     master ! Start(opsPerKiosk)
     val future = ask(master, Join()).mapTo[Stats]
     val done = Await.result(future, 60 seconds)

@@ -1,14 +1,14 @@
-import akka.actor.{Actor, ActorRef, Props}
+
+import akka.actor.SupervisorStrategy.{Escalate, Restart, Resume, Stop}
+import akka.actor.{Actor, ActorRef, OneForOneStrategy, PoisonPill, Props, SupervisorStrategy}
 import akka.event.Logging
 
 import scala.collection.mutable.ListBuffer
 
 /**
-  * GenericService is an example app service for the actor-based KVStore/KVClient.
-  * This one stores Generic Cell objects in the KVStore.  Each app server allocates new
-  * GenericCells (allocCell), writes them, and reads them randomly with consistency
-  * checking (touchCell).  The allocCell and touchCell commands use direct reads
-  * and writes to bypass the client cache.  Keeps a running set of Stats for each burst.
+  * TicketService is an example app service for the actor-based ticket sales app.
+  * Each kiosk is spawned as a child of TicketService actorSystem
+  * Kiosks keep a running set of Stats for each burst.
   *
   * @param myKioskID sequence number of this actor/server in the app tier
   * @param numKiosks total number of servers in the app tier
@@ -17,25 +17,39 @@ import scala.collection.mutable.ListBuffer
   */
 
 
-//class GroupServer (val myNodeID: Int, val numNodes: Int, storeServers: Seq[ActorRef], burstSize: Int) extends Actor {
 class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticket) extends Actor {
   val generator = new scala.util.Random
   val log = Logging(context.system, this)
-
+  var kioskState:Int = 0
   var right = self
   var stats = new Stats
   var allocated: Int = 0
   var kioskList: Option[Seq[ActorRef]] = None
   var tickets = ListBuffer[Ticket]()
 
+  /** fault tolerance kiosk test code **/
+  override val supervisorStrategy =
+    OneForOneStrategy() {
+      case _: Exception => Restart
+    }
 
   def receive() = {
+    case msg(state) =>
+      kioskState = state
+      println("kioskState = " + kioskState)
+      println("tickets remaining = " + tickets.size)
+
+    case ex:Exception =>
+      val child = context.actorOf(Props[KioskChild], name ="KioskChild")
+      right ! ExchangeTickets(tickets)
+      tickets.clear()
+      child ! tickets.size
+      child ! ex
 
     case Neighbor(r) =>
       println("neighbor for " + self.path.name + " = " + r.path.name)
       right = r
     case Prime() =>
-      //createGroups()
       //println(kioskList.get)
     case Command() =>
       statistics(sender)
@@ -46,7 +60,6 @@ class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticke
       right ! MoreTickets
       stats.moreTickets += 1
     case PassTickets(chunkTicketList, chunkSize, numKiosks) =>
-
       if(tickets.isEmpty && !chunkTicketList.isEmpty) {
         for (i <- 0 to chunkSize-1) {
           try {
@@ -59,7 +72,8 @@ class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticke
         }
 
         for (i <- 0 to chunkSize-1) {
-          chunkTicketList-=(ticket)
+          if(!chunkTicketList.isEmpty)chunkTicketList-=(ticket)
+          else right ! MoreTickets
         }
 
         if(!chunkTicketList.isEmpty){
@@ -72,6 +86,16 @@ class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticke
       } else if(!tickets.isEmpty){
         //println("still got tickets")
       }
+
+    case ExchangeTickets(exchangeTickets) =>
+      if(!exchangeTickets.isEmpty && tickets.isEmpty){
+        for(i<-1 to exchangeTickets.size){
+          tickets += ticket
+        }
+      } else{
+        right ! ExchangeTickets(exchangeTickets)
+      }
+
     case SoldOut =>
       stats.soldOut += 1
       right ! SoldOut
@@ -81,6 +105,7 @@ class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticke
     if(!tickets.isEmpty){
       BuyTicket(ticket)
     } else{
+      /** println("KioskEmpty")    **/  // uncomment this line to show the progression of empty kiosk occurences as BuyTickets are handled
       stats.emptyKiosk += 1
       right ! MoreTickets
     }
@@ -94,17 +119,28 @@ class Kiosk(val myKioskID: Int, val numKiosks: Int, burstSize: Int, ticket:Ticke
     }
   }
 
-  def createGroups(): Unit = {
-    val groupMemberShipList = new ListBuffer[ActorRef]()
-    groupMemberShipList.append(self)
-  }
-
-
   def BuyTicket(ticket:Ticket) = {
       tickets -= ticket
       stats.bought +=1
   }
 }
+
+
+/** fault tolerance kiosk test child code **/
+class KioskChild extends Actor {
+  var state = 0
+  def receive = {
+    case ex: Exception =>
+      sender ! msg(state)
+      self ! PoisonPill
+    case x: Int =>
+      state = state+x
+    case "get" => sender() ! msg(state)
+    case PoisonPill =>
+      context.stop(self)
+  }
+}
+
 
 object Kiosk {
   def props(myKioskID: Int, numKiosks: Int, burstSize: Int, ticket: Ticket): Props = {

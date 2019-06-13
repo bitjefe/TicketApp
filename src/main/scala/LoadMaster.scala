@@ -1,7 +1,11 @@
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import java.io._
+
+import akka.actor.SupervisorStrategy.{Decider, Directive, Escalate, Restart, Resume, Stop}
+import akka.actor.{Actor, ActorInitializationException, ActorKilledException, ActorRef, ActorSystem, AllForOneStrategy, OneForOneStrategy, Props, SupervisorStrategy}
 import akka.event.Logging
 
 import scala.collection.mutable.ListBuffer
+import scala.io.Source
 
 sealed trait LoadMasterAPI
 case class Start(maxPerNode: Int) extends LoadMasterAPI
@@ -19,7 +23,7 @@ case class Join() extends LoadMasterAPI
   * @param burstSize How many commands per burst
   */
 
-class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSize: Int, ticketMasterList: ListBuffer[Ticket], chunkSize:Int) extends Actor {
+class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSize: Int, ticketMasterList: ListBuffer[Ticket], ticket:Ticket, chunkSize:Int, file:File) extends Actor {
   val log = Logging(context.system, this)
   var active: Boolean = true
   var listener: Option[ActorRef] = None
@@ -28,6 +32,31 @@ class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSiz
 
   var right = self
   val kioskStats = for (s <- kioskList) yield new Stats
+
+
+  /** Fault Tolerant Strategy for MasterActor. Log ticktMasterList size to file and recover if needed
+    * To Test, go to TestHarness and follow instructions in the "runUntilDone" method */
+  override def postRestart(reason:Throwable):Unit =  {
+    val filename = "masterData.txt"
+    var newTicketMasterListSize = 0
+    for (line <- Source.fromFile(filename).getLines) {
+      newTicketMasterListSize = Integer.parseInt(line)
+    }
+    println(newTicketMasterListSize)
+
+    println(ticketMasterList.size)
+
+    if(newTicketMasterListSize == ticketMasterList.size || ticketMasterList.size < newTicketMasterListSize){
+      println("State recovered")
+    }
+    else{
+      for(t<-1 to newTicketMasterListSize){
+        ticketMasterList += ticket
+      }
+      println(ticketMasterList.size)
+    }
+  }
+
 
   /** create the initial chunk of tickets to pass around to kiosks **/
   val chunkOfTickets = ListBuffer[Ticket]()
@@ -51,6 +80,15 @@ class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSiz
   Thread.sleep(2000)
 
   def receive = {
+
+    case ex: Exception => {
+      val bw = new BufferedWriter(new FileWriter(file))
+      println(ticketMasterList.size)
+      bw.write(String.valueOf(ticketMasterList.size))
+      bw.close()
+      throw ex
+    }
+
     case Start(totalPerKiosk) =>
       log.info("Master starting bursts")
       maxPerKiosk = totalPerKiosk
@@ -78,29 +116,35 @@ class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSiz
     case PassTickets(chunkTicketList, chunkSize, numKiosks) =>
       kioskList(0) ! PassTickets(chunkOfTickets, chunkSize, numKiosks)
 
+      /**Fault Tolerance Testing Code for Kiosks, uncomment line below to test**/
+      //kioskList(8) ! new Exception
+
     case MoreTickets =>
       if(!ticketMasterList.isEmpty){
-        //println("sending more tickets")
+        println("Sending more tickets")
         for (i <- 1 to chunkSize * numKiosks) {
-          if(ticketMasterList.isEmpty){
-            //println("No more tickets in Ticket Master")
-          } else{
+          if(!ticketMasterList.isEmpty){
             chunkOfTickets += ticketMasterList(0)
             ticketMasterList.remove(0)
+            //println("Ticket Master Empty")
           }
         }
         kioskList(0) ! PassTickets(chunkOfTickets, chunkSize, numKiosks)
 
-      } else if(ticketMasterList.isEmpty){
-        kioskList(0) ! PassTickets(chunkOfTickets, chunkSize, numKiosks)
-      } else if(ticketMasterList.isEmpty && chunkOfTickets.isEmpty){
-        println("Event is maybe sold out")
+      }else if(ticketMasterList.isEmpty && chunkOfTickets.isEmpty){
         kioskList(0) ! SoldOut
       }
+      else if(ticketMasterList.isEmpty){
+        println("ChunkOfTickets Remaining: " + chunkOfTickets.size)           //comment this line to remove STD output to console of tickets remaining
+        kioskList(0) ! PassTickets(chunkOfTickets, chunkSize, numKiosks)
+      }
+
+    case ExchangeTickets(exchangeTickets) =>
+      if(!exchangeTickets.isEmpty) kioskList(0) ! ExchangeTickets(exchangeTickets)
+
 
     case SoldOut =>
-      println("Event is sold out, all Kiosks sold out of tickets")
-
+      kioskList(0) ! SoldOut
 
     case Neighbor(r) =>
       println("neighbor for " + self.path.name + " = " + r.path.name)
@@ -125,8 +169,8 @@ class LoadMaster (val numKiosks: Int, val kioskList: Seq[ActorRef], val burstSiz
 }
 
 object LoadMaster {
-   def props(numKiosks: Int, kioskList: Seq[ActorRef], burstSize: Int,ticketMasterList: ListBuffer[Ticket], chunkSize:Int ): Props = {
-      Props(classOf[LoadMaster], numKiosks, kioskList, burstSize, ticketMasterList: ListBuffer[Ticket], chunkSize:Int)
+   def props(numKiosks: Int, kioskList: Seq[ActorRef], burstSize: Int,ticketMasterList: ListBuffer[Ticket], ticket:Ticket, chunkSize:Int, file:File): Props = {
+      Props(classOf[LoadMaster], numKiosks, kioskList, burstSize, ticketMasterList: ListBuffer[Ticket], ticket:Ticket, chunkSize:Int, file:File)
    }
 }
 

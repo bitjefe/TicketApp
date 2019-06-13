@@ -15,3 +15,6 @@ case object CheckTicketsAmount
 case object MoreTickets  // send another chunk when master receives this
 case object SoldOut
 
+case class msg(state:Int)
+
+case class ExchangeTickets(tickets: ListBuffer[Ticket])
